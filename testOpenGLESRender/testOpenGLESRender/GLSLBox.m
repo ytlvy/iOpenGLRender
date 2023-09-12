@@ -85,11 +85,15 @@ typedef struct {
     GLuint positionSlot = glGetAttribLocation(program, "Position");
     GLuint textureSlot = glGetUniformLocation(program, "Texture");  // 注意 Uniform 类型的获取方式
     GLuint textureCoordsSlot = glGetAttribLocation(program, "TextureCoords");
+    GLuint resolutionSlot = glGetUniformLocation(program, "u_resolution"); 
     
     // 将纹理 ID 传给着色器程序
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureID);
     glUniform1i(textureSlot, 0);  // 将 textureSlot 赋值为 0，而 0 与 GL_TEXTURE0 对应，这里如果写 1，上面也要改成 GL_TEXTURE1
+    glUniform2f(resolutionSlot, CGRectGetWidth(self.frame)*[[UIScreen mainScreen] scale], CGRectGetHeight(self.frame)*[[UIScreen mainScreen] scale]);
+    
+    glUniform1f(self.uTime, time);
     
     // 创建顶点缓存
     GLuint vertexBuffer;
@@ -105,7 +109,7 @@ typedef struct {
     // 设置纹理数据
     glEnableVertexAttribArray(textureCoordsSlot);
     glVertexAttribPointer(textureCoordsSlot, 2, GL_FLOAT, GL_FALSE, sizeof(SenceVertex), NULL + offsetof(SenceVertex, textureCoord));
-    
+        
     // 开始绘制
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
@@ -201,6 +205,8 @@ typedef struct {
         NSAssert(NO, @"program链接失败：%@", messageString);
         exit(1);
     }
+    
+    
     return program;
 }
 
@@ -220,8 +226,8 @@ typedef struct {
     
     // 获取 shader 的内容
     const char *shaderStringUTF8 = [shaderString UTF8String];
-    int shaderStringLength = (int)[shaderString length];
-    glShaderSource(shader, 1, &shaderStringUTF8, &shaderStringLength);
+//    int shaderStringLength = (int)[shaderString length];
+    glShaderSource(shader, 1, &shaderStringUTF8, NULL);
     
     // 编译shader
     glCompileShader(shader);
