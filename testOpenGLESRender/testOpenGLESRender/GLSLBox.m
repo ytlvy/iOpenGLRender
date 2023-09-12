@@ -21,6 +21,19 @@ typedef struct {
 
 @property (nonatomic, assign) SenceVertex *vertices; // 顶点数组
 @property (nonatomic, strong) EAGLContext *context;
+@property (nonatomic, strong) CADisplayLink *displayLink;
+@property (assign, nonatomic) GLuint uTime;
+@property (assign, nonatomic) GLuint uResolution;
+@property (assign, nonatomic) NSTimeInterval startTime;
+@property (assign, nonatomic) GLuint program;
+
+@property (nonatomic, assign) CGFloat aspectRatio;
+
+
+@property (nonatomic, assign) GLuint vertexBuffer;
+
+@property (nonatomic, assign) GLuint renderBuffer;
+@property (nonatomic, assign) GLuint frameBuffer;
 
 @end
 
@@ -35,6 +48,8 @@ typedef struct {
         free(_vertices);
         _vertices = nil;
     }
+    
+    [self freeMemory];
 }
 
 - (instancetype)initWithFrame:(CGRect)frame
@@ -48,77 +63,101 @@ typedef struct {
 
 - (void)commonInit {
     // 创建上下文，使用 2.0 版本
-    self.context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
+    self.context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES3];
     [EAGLContext setCurrentContext:self.context];
-    
-    // 创建顶点数组
-    self.vertices = malloc(sizeof(SenceVertex) * 4); // 4 个顶点
-    
-    self.vertices[0] = (SenceVertex){{-1, 1, 0}, {0, 1}}; // 左上角
-    self.vertices[1] = (SenceVertex){{-1, -1, 0}, {0, 0}}; // 左下角
-    self.vertices[2] = (SenceVertex){{1, 1, 0}, {1, 1}}; // 右上角
-    self.vertices[3] = (SenceVertex){{1, -1, 0}, {1, 0}}; // 右下角
     
     // 创建一个展示纹理的层
     CAEAGLLayer *layer = [[CAEAGLLayer alloc] init];
     layer.frame = CGRectMake(0, 100, self.frame.size.width, self.frame.size.width);
     layer.contentsScale = [[UIScreen mainScreen] scale];  // 设置缩放比例，不设置的话，纹理会失真
-    
     [self.layer addSublayer:layer];
+    
     
     // 绑定纹理输出的层
     [self bindRenderLayer:layer];
+    
+    // 设置视口尺寸
+    glViewport(0, 0, self.drawableWidth, self.drawableHeight);
+    
+    glClearColor(0.5, 0.5, 0.5, 1);
+    
+    [self setupShader];
+    [self setupParam];
+    [self startDisplayLinkIfNeeded];
+}
+
+- (void)setupShader {
+    
+    // 编译链接 shader
+    GLuint program = [self programWithShaderName:@"glsl"]; // glsl.vsh & glsl.fsh
+    glUseProgram(program);
+    self.program = program;
+}
+
+- (void)setupParam {
+    GLuint program = self.program;
+    
+    self.aspectRatio = (CGFloat)CGRectGetWidth(self.bounds)/(CGFloat)CGRectGetHeight(self.bounds);
+    
+    // 获取 shader 中的参数，然后传数据进去
+    GLuint textureSlot = glGetUniformLocation(program, "u_texture");  // 注意 Uniform 类型的获取方式
+    
+    // 创建顶点数组
+    self.vertices = malloc(sizeof(SenceVertex) * 4); // 4 个顶点
+    self.vertices[0] = (SenceVertex){{-1, 1, 0}, {0, 1}}; // 左上角
+    self.vertices[1] = (SenceVertex){{-1, -1, 0}, {0, 0}}; // 左下角
+    self.vertices[2] = (SenceVertex){{1, 1, 0}, {1, 1}}; // 右上角
+    self.vertices[3] = (SenceVertex){{1, -1, 0}, {1, 0}}; // 右下角
+    
+    // 创建顶点缓存
+    glGenBuffers(1, &_vertexBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer);
+    GLsizeiptr bufferSizeBytes = sizeof(SenceVertex) * 4;
+    glBufferData(GL_ARRAY_BUFFER, bufferSizeBytes, self.vertices, GL_DYNAMIC_DRAW);
+    
+    // 设置顶点数据
+    GLuint positionSlot = glGetAttribLocation(program, "i_position");
+    glEnableVertexAttribArray(positionSlot);
+    glVertexAttribPointer(positionSlot, 3, GL_FLOAT, GL_FALSE, sizeof(SenceVertex), NULL + offsetof(SenceVertex, positionCoord));
+    
+    // 设置纹理数据
+    GLuint textureCoordsSlot = glGetAttribLocation(program, "i_textureCoord");
+    glEnableVertexAttribArray(textureCoordsSlot);
+    glVertexAttribPointer(textureCoordsSlot, 2, GL_FLOAT, GL_FALSE, sizeof(SenceVertex), NULL + offsetof(SenceVertex, textureCoord));
+        
+    GLuint sampler = glGetUniformLocation(_program, "u_sampler");
+    glUniform1i(sampler, 0);
+    
+    GLuint aspectRatio = glGetUniformLocation(_program, "u_aspectRatio");
+    glUniform1f(aspectRatio, self.aspectRatio);
+    
+    self.uResolution = glGetUniformLocation(program, "u_resolution"); 
+    glUniform2f(self.uResolution, CGRectGetWidth(self.frame)*[[UIScreen mainScreen] scale], CGRectGetHeight(self.frame)*[[UIScreen mainScreen] scale]);
+
+//    self.uTime = glGetUniformLocation(program, "u_time"); 
     
     // 读取纹理
     NSString *imagePath = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"sample.jpg"];
     UIImage *image = [UIImage imageWithContentsOfFile:imagePath];
     GLuint textureID = [self createTextureWithImage:image];
     
-    // 设置视口尺寸
-    glViewport(0, 0, self.drawableWidth, self.drawableHeight);
-    
-    // 编译链接 shader
-    GLuint program = [self programWithShaderName:@"glsl"]; // glsl.vsh & glsl.fsh
-    glUseProgram(program);
-    
-    // 获取 shader 中的参数，然后传数据进去
-    GLuint positionSlot = glGetAttribLocation(program, "Position");
-    GLuint textureSlot = glGetUniformLocation(program, "Texture");  // 注意 Uniform 类型的获取方式
-    GLuint textureCoordsSlot = glGetAttribLocation(program, "TextureCoords");
-    GLuint resolutionSlot = glGetUniformLocation(program, "u_resolution"); 
-    
     // 将纹理 ID 传给着色器程序
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureID);
     glUniform1i(textureSlot, 0);  // 将 textureSlot 赋值为 0，而 0 与 GL_TEXTURE0 对应，这里如果写 1，上面也要改成 GL_TEXTURE1
-    glUniform2f(resolutionSlot, CGRectGetWidth(self.frame)*[[UIScreen mainScreen] scale], CGRectGetHeight(self.frame)*[[UIScreen mainScreen] scale]);
     
-    glUniform1f(self.uTime, time);
-    
-    // 创建顶点缓存
-    GLuint vertexBuffer;
-    glGenBuffers(1, &vertexBuffer);
-    glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
-    GLsizeiptr bufferSizeBytes = sizeof(SenceVertex) * 4;
-    glBufferData(GL_ARRAY_BUFFER, bufferSizeBytes, self.vertices, GL_STATIC_DRAW);
-    
-    // 设置顶点数据
-    glEnableVertexAttribArray(positionSlot);
-    glVertexAttribPointer(positionSlot, 3, GL_FLOAT, GL_FALSE, sizeof(SenceVertex), NULL + offsetof(SenceVertex, positionCoord));
-    
-    // 设置纹理数据
-    glEnableVertexAttribArray(textureCoordsSlot);
-    glVertexAttribPointer(textureCoordsSlot, 2, GL_FLOAT, GL_FALSE, sizeof(SenceVertex), NULL + offsetof(SenceVertex, textureCoord));
+//    glUniform1f(self.uTime, 0.);
         
-    // 开始绘制
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
-    // 将绑定的渲染缓存呈现到屏幕上
-    [self.context presentRenderbuffer:GL_RENDERBUFFER];
+//    // 开始绘制
+//    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+//    
+//    // 将绑定的渲染缓存呈现到屏幕上
+//    [self.context presentRenderbuffer:GL_RENDERBUFFER];
     
-    // 删除顶点缓存
-    glDeleteBuffers(1, &vertexBuffer);
-    vertexBuffer = 0;
+//    // 删除顶点缓存
+//    glDeleteBuffers(1, &vertexBuffer);
+//    vertexBuffer = 0;
 }
 
 
@@ -164,21 +203,22 @@ typedef struct {
 
 // 绑定图像要输出的 layer
 - (void)bindRenderLayer:(CALayer <EAGLDrawable> *)layer {
-    GLuint renderBuffer; // 渲染缓存
-    GLuint frameBuffer;  // 帧缓存
     
+    glDeleteBuffers(1, &_renderBuffer);// 渲染缓存
+    glDeleteBuffers(1, &_frameBuffer);// 帧缓存
+        
     // 绑定渲染缓存要输出的 layer
-    glGenRenderbuffers(1, &renderBuffer);
-    glBindRenderbuffer(GL_RENDERBUFFER, renderBuffer);
+    glGenRenderbuffers(1, &_renderBuffer);
+    glBindRenderbuffer(GL_RENDERBUFFER, _renderBuffer);
     [self.context renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
     
     // 将渲染缓存绑定到帧缓存上
-    glGenFramebuffers(1, &frameBuffer);
-    glBindFramebuffer(GL_FRAMEBUFFER, frameBuffer);
+    glGenFramebuffers(1, &_frameBuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, _frameBuffer);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER,
                               GL_COLOR_ATTACHMENT0,
                               GL_RENDERBUFFER,
-                              renderBuffer);
+                              _renderBuffer);
 }
 
 // 将一个顶点着色器和一个片段着色器挂载到一个着色器程序上，并返回程序的 id
@@ -191,6 +231,9 @@ typedef struct {
     GLuint program = glCreateProgram();
     glAttachShader(program, vertexShader);
     glAttachShader(program, fragmentShader);
+    
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
     
     // 链接 program
     glLinkProgram(program);
@@ -262,5 +305,49 @@ typedef struct {
     return backingHeight;
 }
 
+#pragma makr - timer
+- (void)startDisplayLinkIfNeeded {
+    if (!self.displayLink)
+    {
+        self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(once:)];
+        NSAssert([NSThread isMainThread], @"");
+        [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
+}
+
+- (void)once:(CADisplayLink *)displayLink {
+    if (self.startTime <= 0) {
+        self.startTime = self.displayLink.timestamp;
+    }
+    
+    CGFloat currentTime = self.displayLink.timestamp - self.startTime;
+    GLuint time = glGetUniformLocation(_program, "u_time");
+    glUniform1f(time, currentTime);
+    
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    [self.context presentRenderbuffer:GL_RENDERBUFFER];
+}
+
+- (void)endDisplay {
+    self.displayLink.paused = YES;
+    [self.displayLink invalidate];
+    self.displayLink = nil;
+}
+
+- (void)freeMemory {
+    if ([EAGLContext currentContext] == self.context) {
+        [EAGLContext setCurrentContext:nil];
+    }
+    if (_renderBuffer) {
+        glDeleteBuffers(1, &_renderBuffer);
+    }
+    if (_frameBuffer) {
+        glDeleteBuffers(1, &_frameBuffer);
+    }
+    if (_vertexBuffer) {
+        glDeleteBuffers(1, &_vertexBuffer);
+    }
+}
 
 @end

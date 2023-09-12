@@ -31,7 +31,7 @@
 
 - (GLSLBox *) box {
     if(!_box) {
-        _box = [[GLSLBox alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
+        _box = [[GLSLBox alloc] initWithFrame:CGRectMake(10, 10, 300, 300)];
     }
     return _box;
 }
